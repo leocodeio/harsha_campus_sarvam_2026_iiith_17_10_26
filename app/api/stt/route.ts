@@ -8,7 +8,8 @@ export async function POST(request: Request) {
     if (!(file instanceof Blob) || file.size > 3_000_000)
       return Response.json({ error: "clip missing or too large" }, { status: 413 })
     const form = new FormData()
-    form.set("file", file, "clip.webm")
+    // Sarvam rejects codec params like "audio/webm;codecs=opus"; send the bare mime type.
+    form.set("file", new Blob([file], { type: file.type.split(";")[0] || "audio/webm" }), "clip.webm")
     form.set("model", "saaras:v4")
     form.set("mode", "transcribe")
     form.set("language_code", "en-IN")
