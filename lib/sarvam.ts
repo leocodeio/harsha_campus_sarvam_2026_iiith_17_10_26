@@ -24,7 +24,7 @@ export async function sarvam(path: string, init: RequestInit) {
       await new Promise((r) => setTimeout(r, 1000))
       continue
     }
-    console.error(`sarvam ${path} -> ${res.status}`)
+    console.error(`sarvam ${path} -> ${res.status}`, (await res.text()).slice(0, 300))
     if (res.status === 403) throw new SarvamError(503, "service unavailable")
     throw new SarvamError(res.status, friendly[res.status] ?? "service error")
   }

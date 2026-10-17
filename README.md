@@ -1,21 +1,21 @@
-# Next.js template
+# Campus Sarvam — Talk to Docs
 
-This is a Next.js template with shadcn/ui.
+Paste a docs link, then talk to it. The voice agent reads the docs with you and navigates for you.
 
-## Adding components
+**App link:** _(coming soon — will add deployed link here)_
 
-To add components to your app, run the following command:
+## How to use (3 steps)
 
-```bash
-npx shadcn@latest add button
+**1. Enter this key to unlock**
 ```
-
-This will place the ui components in the `components` directory.
-
-## Using components
-
-To use the components in your app, import them as follows:
-
-```tsx
-import { Button } from "@/components/ui/button";
+campus-sarvam-harsha
 ```
+Type it on the first screen and hit Unlock.
+
+**2. Choose a site**
+- By default the Sarvam docs site is already filled in — just hit **Study site**.
+- Or paste any other docs URL you want to explore.
+
+**3. Start talking**
+- Hold the mic button, ask anything like “open the Bulbul page” or “what does Saaras do?”.
+- The agent navigates the docs and answers you out loud.
