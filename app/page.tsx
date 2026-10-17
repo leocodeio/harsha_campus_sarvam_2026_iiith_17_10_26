@@ -1,19 +1,18 @@
-import { Button } from "@/components/ui/button"
+import { redirect } from "next/navigation"
+import { GateForm } from "@/components/gate-form"
+import { requireSession } from "@/lib/session"
 
-export default function Page() {
+export default async function Page() {
+  if (await requireSession()) redirect("/app")
   return (
-    <div className="flex min-h-svh p-6">
-      <div className="flex max-w-md min-w-0 flex-col gap-4 text-sm leading-loose">
+    <main className="flex min-h-svh items-center justify-center p-6">
+      <div className="w-full max-w-sm space-y-4 rounded-xl border p-6">
         <div>
-          <h1 className="font-medium">Project ready!</h1>
-          <p>You may now add components and start building.</p>
-          <p>We&apos;ve already added the button component for you.</p>
-          <Button className="mt-2">Button</Button>
+          <h1 className="text-lg font-medium">Sarvam AI Docs Reader</h1>
+          <p className="text-sm text-muted-foreground">Enter your access key to continue.</p>
         </div>
-        <div className="font-mono text-xs text-muted-foreground">
-          (Press <kbd>d</kbd> to toggle dark mode)
-        </div>
+        <GateForm />
       </div>
-    </div>
+    </main>
   )
 }

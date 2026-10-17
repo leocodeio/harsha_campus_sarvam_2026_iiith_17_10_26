@@ -5,14 +5,18 @@
 > Rules: `.agents/AGENTS.md`. Write as little code as possible and ship fast. Read
 > `node_modules/next/dist/docs/` before touching any Next API.
 
+> **Note:** `.agents/idea.md` step 1 says the user enters a Sarvam key. That is superseded by
+> §2 below: users enter an access key I issue; the Sarvam key is server-side in `.env`.
+
 ---
 
 ## 0. Goal
 
 A single Next.js app deployed on **Vercel** (project already linked: `.vercel/project.json`).
-Anyone with a link **and a Sarvam API key that I hand out** can:
+Anyone with a link **and an access key that I hand out** can:
 
-1. Unlock the app by entering the key (the **gate**). Nothing is reachable without it.
+1. Unlock the app by entering the access key (the **gate**). Nothing is reachable without it,
+   so nobody else can spend my Sarvam usage. The Sarvam key stays on the server in `.env`.
 2. Paste a docs URL. The app studies the site.
 3. Read the live site in an iframe inside our page, or in a digitised reader view if the
    site can't be framed.
@@ -35,51 +39,60 @@ Sarvam only. No other model providers, no database, no user accounts.
 
 ---
 
-## 2. Auth model: "enter the API key I give you"
+## 2. Auth model: access key (gate) + server-side Sarvam key
 
-**Decision:** the gate key **is** a Sarvam API key. I create keys in
-dashboard.sarvam.ai and give one to each person (or group). The key is the only credential.
-That gives us:
-- **Authentication**: the key is checked live against Sarvam. A revoked key stops working
-  everywhere at once.
-- **Usage and billing per person**: every Sarvam call runs on that person's key, so usage
-  shows up per key in the Sarvam dashboard.
-- **No server secret to leak**: there is no `SARVAM_API_KEY` env var in production.
+**Two separate keys, two jobs:**
+- **Access key (what I hand out):** an app password I invent (e.g. `openssl rand -hex 16`).
+  It only proves "this person is allowed to use my site". It has nothing to do with Sarvam.
+- **Sarvam API key (mine):** lives only in Vercel env as `SARVAM_API_KEY`. The server uses
+  it for every Sarvam call. Users never see it, never type it, and the browser never gets it.
 
-**Optional allowlist (one env var, no DB):** `ALLOWED_KEY_HASHES` = comma-separated
-SHA-256 hashes of the keys I've issued. If it's set, a valid Sarvam key that isn't on the list
-is rejected, so a random Sarvam user can't burn the deployment's compute. If it's empty,
-any valid Sarvam key gets in.
+Goal: nobody without one of my access keys can spend my Sarvam usage.
+
+**Access keys live in one env var (no DB):** `ACCESS_KEYS` = comma-separated
+`label:key` pairs, e.g. `alice:9f2c...,bob:77ab...`. The label is only for me (to know whose
+key is whose, and for logs). Revoke = delete the pair and redeploy.
 
 ### Flow
 ```
-/ (gate)  ──POST key──▶  server action `unlock`
-                          1. (if set) sha256(key) ∈ ALLOWED_KEY_HASHES ?
-                          2. ping Sarvam: POST /v1/chat/completions
-                             {model:"sarvam-105b", max_tokens:1, reasoning_effort:null}
-                             403 → "invalid key"; 429 → "valid but rate-limited" (allow)
-                          3. set cookie `sk` = AES-GCM(key, SESSION_SECRET)
-                             httpOnly, secure, sameSite=lax, maxAge 12h
-                          4. redirect /app
+/ (gate)  ──POST access key──▶  server action `unlock`
+                                 1. constant-time compare against each key in ACCESS_KEYS
+                                    no match → "invalid access key" (same message always,
+                                    small delay to slow guessing)
+                                 2. set cookie `sess` = HMAC-signed {label, exp}
+                                    (signed with SESSION_SECRET), httpOnly, secure,
+                                    sameSite=lax, maxAge 12h
+                                 3. redirect /app
 /logout   ──▶ delete cookie, redirect /
 ```
 
 ### Enforcement
 - **`proxy.ts`** (the Next 16 rename of middleware, see `03-file-conventions/proxy.md`): if
-  `sk` is missing, redirect `/app/**` to `/` and return 401 for `/api/**`. This is an optimistic
+  `sess` is missing, redirect `/app/**` to `/` and return 401 for `/api/**`. This is an optimistic
   presence check only.
-- **`lib/session.ts`** with `getKey()`: every route handler decrypts the cookie and gets the
-  raw key. Missing or undecryptable means 401. This is the real check.
-- The key **never** reaches client JS, localStorage, or logs. Use Web Crypto (`crypto.subtle`)
-  for AES-GCM, so there's no new dependency (no jose or iron-session needed).
-- Any Sarvam `403` mid-session clears the cookie and sends the user back to the gate.
+- **`lib/session.ts`** with `requireSession()`: every route handler verifies the HMAC and
+  expiry, **and that the label is still present in `ACCESS_KEYS`**. Missing, tampered,
+  expired or revoked means 401. This is the real check, and it makes revocation take effect
+  on the next request after a redeploy, not 12 hours later.
+- Use Web Crypto (`crypto.subtle` HMAC), so there's no new dependency (no jose or
+  iron-session needed). The cookie holds no secrets, only a signed label.
+- `SARVAM_API_KEY` is read only in `lib/sarvam.ts`, server side. Never `NEXT_PUBLIC_`.
+- Sarvam `403` from our own key means my key is broken, not the user's. Return a generic
+  500-style "service unavailable" (don't relock the user) and log it.
 
-### Env vars (Vercel → Project → Settings → Environment Variables)
+### Protecting my usage (since it's my Sarvam bill)
+- Every API route requires a valid session. No anonymous path reaches Sarvam.
+- Hard caps in the routes: capture ≤ 40 pages, STT clip ≤ 30s, TTS text ≤ 3,500 chars,
+  agent corpus slice ≤ a fixed size, and 1 study job at a time per request.
+- Per-access-key quotas need shared state (Vercel KV/Edge Config). **Not in v0**; the label
+  logging plus Sarvam dashboard usage is enough to spot abuse, and I can revoke that key.
+
+### Env vars (Vercel → Project → Settings → Environment Variables; same names in `.env.local`)
 | Var | Purpose |
 | --- | --- |
-| `SESSION_SECRET` | 32-byte base64, `openssl rand -base64 32`. Required. |
-| `ALLOWED_KEY_HASHES` | Optional allowlist. |
-| `SARVAM_API_KEY` | **Local dev only** (`.env.local`), used by the curl smoke tests. Never `NEXT_PUBLIC_`. |
+| `SARVAM_API_KEY` | My Sarvam key. Server only. Required. |
+| `ACCESS_KEYS` | The `label:key` pairs I hand out. Required. |
+| `SESSION_SECRET` | 32-byte base64, `openssl rand -base64 32`. Signs the session cookie. Required. |
 
 ---
 
@@ -88,7 +101,7 @@ any valid Sarvam key gets in.
 ```
 Browser (client components)                    Vercel Functions (route handlers)          Sarvam
 ───────────────────────────                    ─────────────────────────────────          ──────
-Gate form ───────────────────────────────────▶ action unlock ───────────────────────────▶ /v1/chat (ping)
+Gate form (access key) ──────────────────────▶ action unlock (checks ACCESS_KEYS, no Sarvam call)
 Setup: URL ──────────────────────────────────▶ /api/capture   (map + frameable + md)
           ◀── SiteMap + corpus (JSON) ───────
           (if no .md twins) ────────────────▶ /api/study      start ─────────────────────▶ /doc-ai digitise
@@ -156,7 +169,7 @@ the "Study" step as the idea specifies without blocking v0 on Chromium.
 
 ```
 proxy.ts                         gate enforcement (cookie presence)
-lib/session.ts                   encrypt/decrypt cookie, getKey(), clearKey()
+lib/session.ts                   sign/verify cookie, requireSession(), clear
 lib/sarvam.ts                    sarvam(path, key, init) fetch wrapper: base URL, header,
                                  403 → AuthError, 429/5xx → 1 retry with backoff
 lib/types.ts                     shapes above
@@ -199,8 +212,8 @@ Open-question defaults (from idea.md), so nothing blocks: **push-to-talk only**,
 
 ## 6. UI (three screens, one URL each)
 
-1. **Gate `/`**: centered card with the title, a password-type input "Sarvam API key", and an
-   Unlock button. Inline error (invalid / rate-limited / not on the allowlist).
+1. **Gate `/`**: centered card with the title, a password-type input "Access key", and an
+   Unlock button. Inline error ("invalid access key").
 2. **Setup `/app`**: URL input with a "Study site" button, then a step list (Mapping →
    Checking framing → Reading pages n/N → Ready).
 3. **Reader `/app`** (same page, once ready): left rail lists pages and sections (clickable,
@@ -217,8 +230,8 @@ works through the theme provider.
 
 | # | Step | Done when |
 | --- | --- | --- |
-| 0 | Commit current scaffold; `.env.local` with `SARVAM_API_KEY`; run the 4 curl smoke tests from `documentation.md §7` | all 4 APIs answer with my key |
-| 1 | `lib/session.ts`, `lib/sarvam.ts`, gate page + `unlock`/`logout`, `proxy.ts` | wrong key rejected; right key reaches `/app`; `/api/*` returns 401 without the cookie |
+| 0 | Commit current scaffold; `.env.local` with `SARVAM_API_KEY`, `ACCESS_KEYS`, `SESSION_SECRET`; run the 4 curl smoke tests from `documentation.md §7` | all 4 APIs answer with my key |
+| 1 | `lib/session.ts`, `lib/sarvam.ts`, gate page + `unlock`/`logout`, `proxy.ts` | wrong access key rejected; right one reaches `/app`; `/api/*` returns 401 without the cookie |
 | 2 | **Deploy to Vercel now** (set `SESSION_SECRET`), test the gate in prod | prod gate works end to end |
 | 3 | `/api/capture` (llms.txt/sitemap/links, frame check, anchors, `.md` fast path) + setup UI | docs.sarvam.ai section → SiteMap with md for every page |
 | 4 | Reader: iframe or fallback, rail navigation | clicking a section jumps the iframe to `#anchor` |
@@ -236,28 +249,35 @@ Steps 0–6 are the demo. Step 7 completes the "Sarvam Vision studies the site" 
 - [ ] **SSRF guard** in capture: allow only `http(s)`, reject localhost, private IP ranges, and
       `169.254.*`; follow redirects manually and re-check each hop; set a 10s timeout and a 2 MB
       size cap per fetch.
-- [ ] Map Sarvam errors to friendly messages: `403` (relock), `422` (clip too long/bad audio),
+- [ ] Map Sarvam errors to friendly messages: `403` (my key broken: generic "service
+      unavailable", log it, don't relock the user), `422` (clip too long/bad audio),
       `429` (wait), `413`, `5xx` (one retry).
-- [ ] Never log request bodies or headers (the key is in the cookie). No `console.log(key)`.
-- [ ] Cookie `secure` in prod, `sameSite=lax`, 12h expiry, cleared on logout or 403.
+- [ ] Never log request bodies, headers, `SARVAM_API_KEY` or access keys. Log only the
+      session label and route.
+- [ ] Gate brute-force: constant-time compare, identical error text, small delay on failure;
+      access keys are long random strings (16+ bytes hex).
+- [ ] Cookie `secure` in prod, `sameSite=lax`, 12h expiry, cleared on logout; rejected if the
+      label is no longer in `ACCESS_KEYS`.
+- [ ] `.env.local` stays gitignored (check `.gitignore` before the first commit).
 - [ ] Our own response headers: `X-Frame-Options: DENY` / `frame-ancestors 'none'` for our
       pages (we frame others, nobody frames us); `Referrer-Policy: no-referrer`.
-- [ ] Per-key soft rate limit isn't needed in v0 because Sarvam rate-limits per key already.
+- [ ] Route caps from §2 are in place (pages, clip length, text length, corpus slice).
 - [ ] `pnpm typecheck && pnpm lint && pnpm build` pass before every deploy.
 
 ---
 
 ## 9. Deploy (Vercel)
 
-1. `vercel env add SESSION_SECRET production` (and preview), plus `ALLOWED_KEY_HASHES` if
-   I'm using the allowlist (`echo -n sk_... | sha256sum`).
+1. Add the three env vars in Vercel (production, and preview if used):
+   `vercel env add SARVAM_API_KEY production`, `ACCESS_KEYS`, `SESSION_SECRET`.
 2. `git push` to the linked repo or run `vercel --prod`. Framework, install, and build are
    already in `vercel.json`.
 3. Prod smoke test: gate with a bad key (rejected), gate with a good key, study
    `https://docs.sarvam.ai/api-reference/...`, navigate by voice, ask a question, lock.
-4. **Issuing access**: create a Sarvam key per person, send it with the URL, and (if using
-   the allowlist) add its hash and redeploy. **Revoking**: delete the key in the Sarvam
-   dashboard, which takes effect immediately.
+4. **Issuing access**: generate a random access key (`openssl rand -hex 16`), add
+   `label:key` to `ACCESS_KEYS`, redeploy, and send the person the URL plus their key.
+   **Revoking**: remove that pair from `ACCESS_KEYS` and redeploy; their session stops
+   working on the next request because the label is re-checked every time.
 
 Vercel limits to keep in mind: function duration (set `maxDuration`, and polling keeps every
 call short), the 4.5 MB request body limit (STT clips ≤30s webm are well under), and the
@@ -284,10 +304,8 @@ call short), the 4.5 MB request body limit (STT clips ≤30s webm are well under
 | Reasoning tokens eat `max_tokens` | `reasoning_effort: "low"`, `max_tokens 1024`; drop to `null` if it's slow |
 | Doc AI account access (402 / beta) | Check at step 0; the `.md` fast path keeps the demo alive regardless |
 | Chromium on Vercel (step 7) | Isolated to one route; if it's too heavy, upload ≤10-page PDFs generated another way, or run Vision only on user-supplied PDFs |
-| Shared key leaks | Per-person keys + allowlist + instant revocation in the Sarvam dashboard |
+| An access key gets shared or leaks | One key per person (labelled), revoke by removing the pair and redeploying; route caps limit the damage meanwhile |
+| My Sarvam key exposed | Server-only env var, never `NEXT_PUBLIC_`, never logged, never returned to the client |
 
 **Needs my confirmation:**
-1. The gate key = a **Sarvam** API key I hand out (assumed). If instead you want a separate
-   app access code plus one server-side Sarvam key, only §2 changes: `ACCESS_KEYS` env and
-   `SARVAM_API_KEY` in Vercel. Everything else stays the same.
-2. First target docs slice (default: Sarvam API reference, speech-to-text section).
+1. First target docs slice (default: Sarvam API reference, speech-to-text section).
