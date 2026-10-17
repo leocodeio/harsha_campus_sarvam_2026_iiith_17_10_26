@@ -14,6 +14,16 @@ export default async function Page() {
           <p className="text-sm text-muted-foreground">Enter your access key to continue.</p>
         </div>
         <GateForm />
+        <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+          <li>Paste a docs link, then talk to it.</li>
+          <li>Voice agent reads the docs with you and navigates for you.</li>
+          <li>Hold the mic, ask — it opens pages and answers out loud.</li>
+          <li>
+            <a href="/demo.mp4" className="underline" target="_blank" rel="noreferrer">
+              Watch live demo
+            </a>
+          </li>
+        </ul>
       </div>
     </main>
   )
